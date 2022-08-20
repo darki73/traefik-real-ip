@@ -19,8 +19,8 @@ type QratorProvider struct {
 	excludedAddresses []net.IP
 }
 
-// Initialize initializes the provider.
-func (qp *QratorProvider) Initialize(excludedNetworks []*net.IPNet, excludedAddresses []net.IP) ProviderInterface {
+// InitializeQratorProvider initializes the provider.
+func InitializeQratorProvider(excludedNetworks []*net.IPNet, excludedAddresses []net.IP) *QratorProvider {
 	return &QratorProvider{
 		name: "qrator",
 		headers: []string{

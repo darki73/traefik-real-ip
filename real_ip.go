@@ -2,6 +2,7 @@ package traefik_real_ip
 
 import (
 	"context"
+	"fmt"
 	"github.com/darki73/traefik-real-ip/pkg/providers"
 	"net"
 	"net/http"
@@ -28,23 +29,26 @@ func CreateConfig() *Config {
 
 // TraefikRealIP holds the necessary components of a Traefik plugin.
 type TraefikRealIP struct {
-	next              http.Handler
-	name              string
-	excludedNetworks  []*net.IPNet
-	excludedAddresses []net.IP
-	providers         map[string]providers.ProviderInterface
-	preferredProvider string
-	providersIPs      map[string]string
+	next               http.Handler
+	name               string
+	excludedNetworks   []*net.IPNet
+	excludedAddresses  []net.IP
+	availableProviders []string
+	genericProvider    *providers.GenericProvider
+	cloudflareProvider *providers.CloudflareProvider
+	qratorProvider     *providers.QratorProvider
+	preferredProvider  string
+	providersIPs       map[string]string
 }
 
 // New instantiates and returns the required components used to handle HTTP request.
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
 	trip := &TraefikRealIP{
-		next:              next,
-		name:              name,
-		providers:         map[string]providers.ProviderInterface{},
-		preferredProvider: config.PreferredProvider,
-		providersIPs:      map[string]string{},
+		next:               next,
+		name:               name,
+		availableProviders: []string{"generic", "cloudflare", "qrator"},
+		preferredProvider:  config.PreferredProvider,
+		providersIPs:       make(map[string]string),
 	}
 
 	for _, value := range config.ExcludedNetworks {
@@ -63,28 +67,34 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		}
 	}
 
-	manager := providers.Initialize(trip.GetExcludedNetworks(), trip.GetExcludedAddresses())
-
 	if config.PreferredProvider != "" {
-		if !manager.IsValidProvider(config.PreferredProvider) {
-			return nil, providers.ErrorInvalidPreferredProvider
+		if !trip.IsValidProvider(config.PreferredProvider) {
+			return nil, fmt.Errorf(
+				"preferred provider %s is not valid, only the following ones are supported: %s",
+				config.PreferredProvider,
+				strings.Join(trip.availableProviders, ", "),
+			)
 		}
 	}
 
-	if len(config.Providers) == 0 {
-		trip.providers = manager.GetProviders()
+	trip.genericProvider = providers.InitializeGenericProvider(trip.GetExcludedNetworks(), trip.GetExcludedAddresses())
+
+	for _, provider := range config.Providers {
+		if !trip.IsValidProvider(provider) {
+			return nil, fmt.Errorf("provider %s is not valid, only the following ones are supported: %s", provider, strings.Join(trip.availableProviders, ", "))
+		}
+	}
+
+	if config.Providers != nil || len(config.Providers) == 0 {
+		trip.cloudflareProvider = providers.InitializeCloudflareProvider(trip.GetExcludedNetworks(), trip.GetExcludedAddresses())
+		trip.qratorProvider = providers.InitializeQratorProvider(trip.GetExcludedNetworks(), trip.GetExcludedAddresses())
 	} else {
-		for _, value := range config.Providers {
-			provider := strings.TrimSpace(strings.ToLower(value))
-			if manager.IsValidProvider(provider) {
-				trip.providers[provider] = manager.GetProvider(provider)
-			} else {
-				return nil, providers.ErrorInvalidProvider
-			}
+		if trip.ConfigHasProvider("cloudflare", config.Providers) {
+			trip.cloudflareProvider = providers.InitializeCloudflareProvider(trip.GetExcludedNetworks(), trip.GetExcludedAddresses())
 		}
 
-		if _, ok := trip.providers["generic"]; !ok {
-			trip.providers["generic"] = manager.GetProvider("generic")
+		if trip.ConfigHasProvider("qrator", config.Providers) {
+			trip.qratorProvider = providers.InitializeQratorProvider(trip.GetExcludedNetworks(), trip.GetExcludedAddresses())
 		}
 	}
 
@@ -93,33 +103,19 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 
 // ServeHTTP handles the HTTP request.
 func (trip *TraefikRealIP) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
-	for providerName, providerInstance := range trip.GetProviders() {
-		realIP := providerInstance.GetRealIP(request)
-		if realIP != "" {
-			trip.providersIPs[providerName] = realIP
-		}
-	}
-
 	realIP := ""
 
-	if _, ok := trip.providersIPs["generic"]; ok {
-		realIP = trip.providersIPs["generic"]
-		delete(trip.providersIPs, "generic")
+	if trip.HasPreferredProvider() {
+		if trip.GetPreferredProvider() == "cloudflare" {
+			realIP = trip.cloudflareProvider.GetRealIP(request)
+		}
+		if trip.GetPreferredProvider() == "qrator" {
+			realIP = trip.qratorProvider.GetRealIP(request)
+		}
 	}
 
-	if len(trip.providersIPs) > 0 {
-		if trip.HasPreferredProvider() {
-			if _, ok := trip.providersIPs[trip.GetPreferredProvider()]; ok {
-				realIP = trip.providersIPs[trip.GetPreferredProvider()]
-			}
-		} else {
-			for _, provider := range trip.GetProviders() {
-				if _, ok := trip.providersIPs[provider.GetName()]; ok {
-					realIP = trip.providersIPs[provider.GetName()]
-					break
-				}
-			}
-		}
+	if realIP == "" {
+		realIP = trip.genericProvider.GetRealIP(request)
 	}
 
 	if realIP != "" {
@@ -140,11 +136,6 @@ func (trip *TraefikRealIP) GetExcludedAddresses() []net.IP {
 	return trip.excludedAddresses
 }
 
-// GetProviders returns list of providers.
-func (trip *TraefikRealIP) GetProviders() map[string]providers.ProviderInterface {
-	return trip.providers
-}
-
 // GetPreferredProvider returns preferred provider.
 func (trip *TraefikRealIP) GetPreferredProvider() string {
 	return trip.preferredProvider
@@ -153,4 +144,24 @@ func (trip *TraefikRealIP) GetPreferredProvider() string {
 // HasPreferredProvider returns true if preferred provider is set.
 func (trip *TraefikRealIP) HasPreferredProvider() bool {
 	return trip.preferredProvider != ""
+}
+
+// IsValidProvider returns true if provider is valid.
+func (trip *TraefikRealIP) IsValidProvider(provider string) bool {
+	for _, value := range trip.availableProviders {
+		if value == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// ConfigHasProvider returns true if provider is configured.
+func (trip *TraefikRealIP) ConfigHasProvider(provider string, providers []string) bool {
+	for _, value := range providers {
+		if value == provider {
+			return true
+		}
+	}
+	return false
 }

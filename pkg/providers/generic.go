@@ -20,8 +20,8 @@ type GenericProvider struct {
 	excludedAddresses []net.IP
 }
 
-// Initialize initializes the provider.
-func (gp *GenericProvider) Initialize(excludedNetworks []*net.IPNet, excludedAddresses []net.IP) ProviderInterface {
+// InitializeGenericProvider initializes the Generic provider.
+func InitializeGenericProvider(excludedNetworks []*net.IPNet, excludedAddresses []net.IP) *GenericProvider {
 	return &GenericProvider{
 		name: "generic",
 		headers: []string{

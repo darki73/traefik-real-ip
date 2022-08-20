@@ -20,15 +20,15 @@ type CloudflareProvider struct {
 	excludedAddresses []net.IP
 }
 
-// Initialize initializes the provider.
-func (cfp *CloudflareProvider) Initialize(excludedNetworks []*net.IPNet, excludedAddresses []net.IP) ProviderInterface {
+// InitializeCloudflareProvider initializes the Cloudflare provider.
+func InitializeCloudflareProvider(excludedNetworks []*net.IPNet, excludedAddresses []net.IP) *CloudflareProvider {
 	return &CloudflareProvider{
 		name: "cloudflare",
 		headers: []string{
 			_cloudflareProviderTrueClientIPHeader,
 			_cloudflareProviderCFConnectingIPHeader,
 		},
-		values:            map[string]string{},
+		values:            make(map[string]string),
 		excludedNetworks:  excludedNetworks,
 		excludedAddresses: excludedAddresses,
 	}

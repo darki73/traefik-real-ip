@@ -1,0 +1,11 @@
+displayName: Traefik Real IP
+type: middleware
+import: github.com/darki73/traefik-real-ip
+
+summary: This plugin allows you to obtain real users IP when Traefik is deployed behind a load balancer.
+
+testData:
+  excludedNetworks: []
+  excludedAddresses: []
+  providers: []
+  preferredProvider: ""

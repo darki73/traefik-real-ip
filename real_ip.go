@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // Config holds configuration passed to the plugin.
@@ -39,6 +40,7 @@ type TraefikRealIP struct {
 	qratorProvider     *providers.QratorProvider
 	preferredProvider  string
 	providersIPs       map[string]string
+	mutex              sync.Mutex
 }
 
 // New instantiates and returns the required components used to handle HTTP request.
@@ -119,8 +121,10 @@ func (trip *TraefikRealIP) ServeHTTP(responseWriter http.ResponseWriter, request
 	}
 
 	if realIP != "" {
+		trip.mutex.Lock()
 		request.Header.Set("X-Forwarded-For", realIP)
 		request.Header.Set("X-Real-Ip", realIP)
+		trip.mutex.Unlock()
 	}
 
 	trip.next.ServeHTTP(responseWriter, request)
